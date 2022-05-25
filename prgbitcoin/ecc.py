@@ -1,70 +1,59 @@
 from unittest import TestCase
 
+from typing_extensions import Self
 
-# tag::source1[]
+
 class FieldElement:
-
-    def __init__(self, num, prime):
-        if num >= prime or num < 0:  # <1>
-            error = 'Num {} not in field range 0 to {}'.format(
-                num, prime - 1)
-            raise ValueError(error)
-        self.num = num  # <2>
+    def __init__(self, num: int, prime: int):
+        if not (0 <= num < prime):
+            raise ValueError(f'{num} not in range [0, {prime})')
+        self.num = num
         self.prime = prime
 
+    def create_in_same_order(self, num: int) -> Self:
+        return self.__class__(num % self.prime, self.prime)
+
+    def check_same_order(self, other: 'FieldElement', op: str):
+        if self.prime != other.prime:
+            raise TypeError(f'Cannot {op} two numbers in different Fields')
+
     def __repr__(self):
-        return 'FieldElement_{}({})'.format(self.prime, self.num)
+        return f'FieldElement({self.num}, {self.prime})'
 
-    def __eq__(self, other):
-        if other is None:
-            return False
-        return self.num == other.num and self.prime == other.prime  # <3>
-    # end::source1[]
+    def __eq__(self, other: object):
+        if isinstance(other, FieldElement):
+            return self.num == other.num and self.prime == other.prime
+        return False
 
-    def __ne__(self, other):
-        # this should be the inverse of the == operator
-        raise NotImplementedError
+    def __add__(self, other: object) -> Self:
+        if isinstance(other, FieldElement):
+            self.check_same_order(other, 'add')
+            return self.create_in_same_order(self.num + other.num)
+        return NotImplemented
 
-    # tag::source2[]
-    def __add__(self, other):
-        if self.prime != other.prime:  # <1>
-            raise TypeError('Cannot add two numbers in different Fields')
-        num = (self.num + other.num) % self.prime  # <2>
-        return self.__class__(num, self.prime)  # <3>
-    # end::source2[]
+    def __sub__(self, other: object) -> Self:
+        if isinstance(other, FieldElement):
+            self.check_same_order(other, 'subtract')
+            return self.create_in_same_order(self.num - other.num)
+        return NotImplemented
 
-    def __sub__(self, other):
-        if self.prime != other.prime:
-            raise TypeError('Cannot subtract two numbers in different Fields')
-        # self.num and other.num are the actual values
-        # self.prime is what we need to mod against
-        # We return an element of the same class
-        raise NotImplementedError
+    def __mul__(self, other: object) -> Self:
+        if isinstance(other, FieldElement):
+            self.check_same_order(other, 'multiply')
+            return self.create_in_same_order(self.num * other.num)
+        return NotImplemented
 
-    def __mul__(self, other):
-        if self.prime != other.prime:
-            raise TypeError('Cannot multiply two numbers in different Fields')
-        # self.num and other.num are the actual values
-        # self.prime is what we need to mod against
-        # We return an element of the same class
-        raise NotImplementedError
+    def __pow__(self, exponent: object) -> Self:
+        if isinstance(exponent, int):
+            n = exponent % (self.prime - 1)
+            return self.create_in_same_order(pow(self.num, n, self.prime))
+        return NotImplemented
 
-    # tag::source3[]
-    def __pow__(self, exponent):
-        n = exponent % (self.prime - 1)  # <1>
-        num = pow(self.num, n, self.prime)
-        return self.__class__(num, self.prime)
-    # end::source3[]
-
-    def __truediv__(self, other):
-        if self.prime != other.prime:
-            raise TypeError('Cannot divide two numbers in different Fields')
-        # use fermat's little theorem:
-        # self.num**(p-1) % p == 1
-        # this means:
-        # 1/n == pow(n, p-2, p)
-        # We return an element of the same class
-        raise NotImplementedError
+    def __truediv__(self, other: object) -> Self:
+        if isinstance(other, FieldElement):
+            self.check_same_order(other, 'divide')
+            return self * other ** -1
+        return NotImplemented
 
 
 class FieldElementTest(TestCase):
