@@ -6,6 +6,7 @@ authors = ["Boseong Choi <cbscsm@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+jupyter = "^1.0.0"
 
 [tool.poetry.dev-dependencies]
 
