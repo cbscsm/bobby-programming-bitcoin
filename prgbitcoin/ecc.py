@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+from random import randint
 from typing import Optional, Union
 from unittest import TestCase
 
@@ -172,15 +175,20 @@ class Point:
     def is_at_infinite(self) -> bool:
         return self.x is None or self.y is None
 
-    def __rmul__(self, coefficient: int):
-        current = self
-        result = self.new_at_infinite()
-        while coefficient:
-            if coefficient & 1:
-                result += current
-            current += current
-            coefficient >>= 1
-        return result
+    def __mul__(self, other: int) -> Self:
+        if isinstance(other, int):
+            current = self
+            result = self.new_at_infinite()
+            while other:
+                if other & 1:
+                    result += current
+                current += current
+                other >>= 1
+            return result
+        return NotImplemented
+
+    def __rmul__(self, other: int) -> Self:
+        return self.__mul__(other)
 
 
 class PointTest(TestCase):
@@ -209,7 +217,6 @@ class PointTest(TestCase):
         self.assertEqual(a + a, Point(x=18, y=77, a=5, b=7))
 
 
-# tag::source2[]
 class ECCTest(TestCase):
 
     def test_on_curve(self):
@@ -221,13 +228,12 @@ class ECCTest(TestCase):
         for x_raw, y_raw in valid_points:
             x = FieldElement(x_raw, prime)
             y = FieldElement(y_raw, prime)
-            Point(x, y, a, b)  # <1>
+            Point(x, y, a, b)
         for x_raw, y_raw in invalid_points:
             x = FieldElement(x_raw, prime)
             y = FieldElement(y_raw, prime)
             with self.assertRaises(ValueError):
-                Point(x, y, a, b)  # <1>
-    # end::source2[]
+                Point(x, y, a, b)
 
     def test_add(self):
         # tests the following additions on curve y^2=x^3-7 over F_223:
@@ -244,12 +250,11 @@ class ECCTest(TestCase):
             (47, 71, 117, 141, 60, 139),
             (143, 98, 76, 66, 47, 71),
         )
-
-        # loop over additions
-        # initialize x's and y's as FieldElements
-        # create p1, p2 and p3 as Points
-        # check p1+p2==p3
-        raise NotImplementedError
+        for x1, y1, x2, y2, x3, y3 in additions:
+            p1 = Point(FieldElement(x1, prime), FieldElement(y1, prime), a, b)
+            p2 = Point(FieldElement(x2, prime), FieldElement(y2, prime), a, b)
+            p3 = Point(FieldElement(x3, prime), FieldElement(y3, prime), a, b)
+            self.assertEqual(p1 + p2, p3)
 
     def test_rmul(self):
         # tests the following scalar multiplications
@@ -290,60 +295,51 @@ class ECCTest(TestCase):
             self.assertEqual(s * p1, p2)
 
 
-# tag::source6[]
 A = 0
 B = 7
-# end::source6[]
-# tag::source4[]
 P = 2**256 - 2**32 - 977
-# end::source4[]
-# tag::source9[]
 N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
-# end::source9[]
 
 
-# tag::source5[]
 class S256Field(FieldElement):
-
-    def __init__(self, num, prime=None):
+    def __init__(self, num: int, prime=None):
         super().__init__(num=num, prime=P)
 
     def __repr__(self):
-        return '{:x}'.format(self.num).zfill(64)
-# end::source5[]
+        return f'S256Field(0x{self.num:x})'
+
+    def __str__(self):
+        return f'0x{self.num:064x}'
 
 
-# tag::source7[]
 class S256Point(Point):
-
-    def __init__(self, x, y, a=None, b=None):
+    def __init__(self, x: Optional[int], y: Optional[int], a=None, b=None):
         a, b = S256Field(A), S256Field(B)
-        if type(x) == int:
-            super().__init__(x=S256Field(x), y=S256Field(y), a=a, b=b)
+        if isinstance(x, int) and isinstance(y, int):
+            super().__init__(S256Field(x), S256Field(y), a, b)
         else:
-            super().__init__(x=x, y=y, a=a, b=b)  # <1>
-    # end::source7[]
+            super().__init__(x, y, a, b)
 
     def __repr__(self):
         if self.x is None:
-            return 'S256Point(infinity)'
-        else:
-            return 'S256Point({}, {})'.format(self.x, self.y)
+            return 'S256Point(None, None)'
+        return f'S256Point(0x{self.x.num}, 0x{self.y.num})'
 
-    # tag::source8[]
-    def __rmul__(self, coefficient):
-        coef = coefficient % N  # <1>
-        return super().__rmul__(coef)
-    # end::source8[]
+    def __str__(self):
+        if self.x is None:
+            return 'infinity'
+        return f'({self.x}, {self.y})'
 
-    # tag::source12[]
-    def verify(self, z, sig):
-        s_inv = pow(sig.s, N - 2, N)  # <1>
-        u = z * s_inv % N  # <2>
-        v = sig.r * s_inv % N  # <3>
-        total = u * G + v * self  # <4>
-        return total.x.num == sig.r  # <5>
-    # end::source12[]
+    def __mul__(self, other: int) -> Self:
+        coefficient = other % N
+        return super().__mul__(coefficient)
+
+    def verify(self, z, sig: 'Signature') -> bool:
+        s_inv = pow(sig.s, N - 2, N)
+        u = z * s_inv % N
+        v = sig.r * s_inv % N
+        total = u * G + v * self
+        return total.x.num == sig.r
 
 
 # tag::source10[]
@@ -390,32 +386,25 @@ class S256Test(TestCase):
         self.assertTrue(point.verify(z, Signature(r, s)))
 
 
-# tag::source11[]
 class Signature:
-
     def __init__(self, r, s):
         self.r = r
         self.s = s
 
     def __repr__(self):
-        return 'Signature({:x},{:x})'.format(self.r, self.s)
-# end::source11[]
+        return f'Signature(0x{self.r:x}, 0x{self.s:x})'
 
 
-# tag::source13[]
 class PrivateKey:
-
     def __init__(self, secret):
         self.secret = secret
-        self.point = secret * G  # <1>
+        self.point = secret * G
 
     def hex(self):
         return '{:x}'.format(self.secret).zfill(64)
-    # end::source13[]
 
-    # tag::source14[]
     def sign(self, z):
-        k = self.deterministic_k(z)  # <1>
+        k = self.deterministic_k(z)
         r = (k * G).x.num
         k_inv = pow(k, N - 2, N)
         s = (z + r * self.secret) * k_inv % N
