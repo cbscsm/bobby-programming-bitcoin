@@ -342,11 +342,9 @@ class S256Point(Point):
         return total.x.num == sig.r
 
 
-# tag::source10[]
 G = S256Point(
     0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798,
     0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8)
-# end::source10[]
 
 
 class S256Test(TestCase):
@@ -401,7 +399,7 @@ class PrivateKey:
         self.point = secret * G
 
     def hex(self):
-        return '{:x}'.format(self.secret).zfill(64)
+        return f'{self.secret:064x}'
 
     def sign(self, z):
         k = self.deterministic_k(z)
@@ -427,11 +425,10 @@ class PrivateKey:
         while True:
             v = hmac.new(k, v, s256).digest()
             candidate = int.from_bytes(v, 'big')
-            if candidate >= 1 and candidate < N:
-                return candidate  # <2>
+            if 1 <= candidate < N:
+                return candidate
             k = hmac.new(k, v + b'\x00', s256).digest()
             v = hmac.new(k, v, s256).digest()
-    # end::source14[]
 
 
 class PrivateKeyTest(TestCase):
