@@ -1,10 +1,13 @@
 import hashlib
 import hmac
+from io import BytesIO
 from random import randint
 from typing import Optional, Union
 from unittest import TestCase
 
 from typing_extensions import Self
+
+from prgbitcoin.helper import encode_base58_checksum, hash160
 
 
 class FieldElement:
@@ -309,7 +312,16 @@ class S256Field(FieldElement):
         return f'S256Field(0x{self.num:x})'
 
     def __str__(self):
+        # 원래 코드는 '{:x}'.format(self.num).zfill(64) 였지만
+        # str.format 혹은 f-string을 사용하는 경우 zfill을 안쓰고
+        # 서식문자로 0을 채울 수 있음.
         return f'0x{self.num:064x}'
+
+    def sqrt(self) -> Self:
+        # 원래 거듭제곱은 (P + 1) // 4 이지만, (P + 1) % 4 == 0 이므로
+        # P // 4 와 결과가 같음(//는 내림 나눗셈). 이는 더 간단한 연산인
+        # P >> 2 로 대체할 수 있음.
+        return self**(P >> 2)
 
 
 class S256Point(Point):
@@ -331,8 +343,10 @@ class S256Point(Point):
         return f'({self.x}, {self.y})'
 
     def __mul__(self, other: int) -> Self:
-        coefficient = other % N
-        return super().__mul__(coefficient)
+        if isinstance(other, int):
+            coefficient = other % N
+            return super().__mul__(coefficient)
+        return NotImplemented
 
     def verify(self, z, sig: 'Signature') -> bool:
         s_inv = pow(sig.s, N - 2, N)
@@ -340,6 +354,34 @@ class S256Point(Point):
         v = sig.r * s_inv % N
         total = u * G + v * self
         return total.x.num == sig.r
+
+    def sec(self, compressed: bool = True) -> bytes:
+        x_bytes = self.x.num.to_bytes(32, 'big')
+        if compressed:
+            return bytes([2 + (self.y.num & 1)]) + x_bytes
+        return b'\x04' + x_bytes + self.y.num.to_bytes(32, 'big')
+
+    def hash160(self, compressed: bool = True) -> bytes:
+        return hash160(self.sec(compressed))
+
+    def address(self, compressed: bool = True, testnet: bool = False) -> str:
+        prefix = b'\x6f' if testnet else b'\x00'
+        h160 = self.hash160(compressed)
+        return encode_base58_checksum(prefix + h160)
+
+    @classmethod
+    def parse(cls, sec_bin: bytes) -> Self:
+        x = int.from_bytes(sec_bin[1:33], 'big')
+        if sec_bin[0] == 4:
+            y = int.from_bytes(sec_bin[33:65], 'big')
+            return S256Point(x, y)
+        beta = (S256Field(x)**3 + S256Field(B)).sqrt()
+        beta_pair = (
+            (S256Field(P - beta.num), beta)
+            if beta.num & 1 else
+            (beta, S256Field(P - beta.num))
+        )
+        return beta_pair[sec_bin[0] - 1]
 
 
 G = S256Point(
@@ -383,6 +425,52 @@ class S256Test(TestCase):
         s = 0xc7207fee197d27c618aea621406f6bf5ef6fca38681d82b2f06fddbdce6feab6
         self.assertTrue(point.verify(z, Signature(r, s)))
 
+    def test_sec(self):
+        coefficient = 999**3
+        uncompressed = '049d5ca49670cbe4c3bfa84c96a8c87df086c6ea6a24ba6b809c9de234496808d56fa15cc7f3d38cda98dee2419f415b7513dde1301f8643cd9245aea7f3f911f9'
+        compressed = '039d5ca49670cbe4c3bfa84c96a8c87df086c6ea6a24ba6b809c9de234496808d5'
+        point = coefficient * G
+        self.assertEqual(point.sec(compressed=False), bytes.fromhex(uncompressed))
+        self.assertEqual(point.sec(compressed=True), bytes.fromhex(compressed))
+        coefficient = 123
+        uncompressed = '04a598a8030da6d86c6bc7f2f5144ea549d28211ea58faa70ebf4c1e665c1fe9b5204b5d6f84822c307e4b4a7140737aec23fc63b65b35f86a10026dbd2d864e6b'
+        compressed = '03a598a8030da6d86c6bc7f2f5144ea549d28211ea58faa70ebf4c1e665c1fe9b5'
+        point = coefficient * G
+        self.assertEqual(point.sec(compressed=False), bytes.fromhex(uncompressed))
+        self.assertEqual(point.sec(compressed=True), bytes.fromhex(compressed))
+        coefficient = 42424242
+        uncompressed = '04aee2e7d843f7430097859e2bc603abcc3274ff8169c1a469fee0f20614066f8e21ec53f40efac47ac1c5211b2123527e0e9b57ede790c4da1e72c91fb7da54a3'
+        compressed = '03aee2e7d843f7430097859e2bc603abcc3274ff8169c1a469fee0f20614066f8e'
+        point = coefficient * G
+        self.assertEqual(point.sec(compressed=False), bytes.fromhex(uncompressed))
+        self.assertEqual(point.sec(compressed=True), bytes.fromhex(compressed))
+
+    def test_address(self):
+        secret = 888**3
+        mainnet_address = '148dY81A9BmdpMhvYEVznrM45kWN32vSCN'
+        testnet_address = 'mieaqB68xDCtbUBYFoUNcmZNwk74xcBfTP'
+        point = secret * G
+        self.assertEqual(
+            point.address(compressed=True, testnet=False), mainnet_address)
+        self.assertEqual(
+            point.address(compressed=True, testnet=True), testnet_address)
+        secret = 321
+        mainnet_address = '1S6g2xBJSED7Qr9CYZib5f4PYVhHZiVfj'
+        testnet_address = 'mfx3y63A7TfTtXKkv7Y6QzsPFY6QCBCXiP'
+        point = secret * G
+        self.assertEqual(
+            point.address(compressed=False, testnet=False), mainnet_address)
+        self.assertEqual(
+            point.address(compressed=False, testnet=True), testnet_address)
+        secret = 4242424242
+        mainnet_address = '1226JSptcStqn4Yq9aAmNXdwdc2ixuH9nb'
+        testnet_address = 'mgY3bVusRUL6ZB2Ss999CSrGVbdRwVpM8s'
+        point = secret * G
+        self.assertEqual(
+            point.address(compressed=False, testnet=False), mainnet_address)
+        self.assertEqual(
+            point.address(compressed=False, testnet=True), testnet_address)
+
 
 class Signature:
     def __init__(self, r, s):
@@ -391,6 +479,63 @@ class Signature:
 
     def __repr__(self):
         return f'Signature(0x{self.r:x}, 0x{self.s:x})'
+
+    def der(self):
+        rbin = self.r.to_bytes(32, byteorder='big')
+        # remove all null bytes at the beginning
+        rbin = rbin.lstrip(b'\x00')
+        # if rbin has a high bit, add a \x00
+        if rbin[0] & 0x80:
+            rbin = b'\x00' + rbin
+        result = bytes([2, len(rbin)]) + rbin  # <1>
+        sbin = self.s.to_bytes(32, byteorder='big')
+        # remove all null bytes at the beginning
+        sbin = sbin.lstrip(b'\x00')
+        # if sbin has a high bit, add a \x00
+        if sbin[0] & 0x80:
+            sbin = b'\x00' + sbin
+        result += bytes([2, len(sbin)]) + sbin
+        return bytes([0x30, len(result)]) + result
+    # end::source4[]
+
+    @classmethod
+    def parse(cls, signature_bin):
+        s = BytesIO(signature_bin)
+        compound = s.read(1)[0]
+        if compound != 0x30:
+            raise SyntaxError("Bad Signature")
+        length = s.read(1)[0]
+        if length + 2 != len(signature_bin):
+            raise SyntaxError("Bad Signature Length")
+        marker = s.read(1)[0]
+        if marker != 0x02:
+            raise SyntaxError("Bad Signature")
+        rlength = s.read(1)[0]
+        r = int.from_bytes(s.read(rlength), 'big')
+        marker = s.read(1)[0]
+        if marker != 0x02:
+            raise SyntaxError("Bad Signature")
+        slength = s.read(1)[0]
+        s = int.from_bytes(s.read(slength), 'big')
+        if len(signature_bin) != 6 + rlength + slength:
+            raise SyntaxError("Signature too long")
+        return cls(r, s)
+
+
+class SignatureTest(TestCase):
+
+    def test_der(self):
+        testcases = (
+            (1, 2),
+            (randint(0, 2**256), randint(0, 2**255)),
+            (randint(0, 2**256), randint(0, 2**255)),
+        )
+        for r, s in testcases:
+            sig = Signature(r, s)
+            der = sig.der()
+            sig2 = Signature.parse(der)
+            self.assertEqual(sig2.r, r)
+            self.assertEqual(sig2.s, s)
 
 
 class PrivateKey:
@@ -430,6 +575,12 @@ class PrivateKey:
             k = hmac.new(k, v + b'\x00', s256).digest()
             v = hmac.new(k, v, s256).digest()
 
+    def wif(self, compressed=True, testnet=False):
+        secret_bytes = self.secret.to_bytes(32, 'big')
+        prefix = b'\xef' if testnet else b'\x80'
+        suffix = b'\x01' if compressed else b''
+        return encode_base58_checksum(prefix + secret_bytes + suffix)
+
 
 class PrivateKeyTest(TestCase):
 
@@ -438,3 +589,17 @@ class PrivateKeyTest(TestCase):
         z = randint(0, 2**256)
         sig = pk.sign(z)
         self.assertTrue(pk.point.verify(z, sig))
+
+    def test_wif(self):
+        pk = PrivateKey(2**256 - 2**199)
+        expected = 'L5oLkpV3aqBJ4BgssVAsax1iRa77G5CVYnv9adQ6Z87te7TyUdSC'
+        self.assertEqual(pk.wif(compressed=True, testnet=False), expected)
+        pk = PrivateKey(2**256 - 2**201)
+        expected = '93XfLeifX7Jx7n7ELGMAf1SUR6f9kgQs8Xke8WStMwUtrDucMzn'
+        self.assertEqual(pk.wif(compressed=False, testnet=True), expected)
+        pk = PrivateKey(0x0dba685b4511dbd3d368e5c4358a1277de9486447af7b3604a69b8d9d8b7889d)
+        expected = '5HvLFPDVgFZRK9cd4C5jcWki5Skz6fmKqi1GQJf5ZoMofid2Dty'
+        self.assertEqual(pk.wif(compressed=False, testnet=False), expected)
+        pk = PrivateKey(0x1cca23de92fd1862fb5b76e5f4f50eb082165e5191e116c18ed1a6b24be6a53f)
+        expected = 'cNYfWuhDpbNM1JWc3c6JTrtrFVxU4AGhUKgw5f93NP2QaBqmxKkg'
+        self.assertEqual(pk.wif(compressed=True, testnet=True), expected)
